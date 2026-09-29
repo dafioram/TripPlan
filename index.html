@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Itinerary</title>
+<meta name="description" content="A pretty, offline-friendly travel itinerary planner." />
+<meta name="theme-color" content="#0E1526" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ===== Header ===== -->
+  <header class="app-header">
+    <div class="header-row">
+      <h1 id="tripTitle">Trip</h1>
+      <button id="themeToggle" class="icon-btn" type="button" aria-label="Toggle dark mode">
+        <svg id="iconMoon" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M20.7 14.6a8.6 8.6 0 0 1-10.3-10.3 1 1 0 0 0-1.3-1.2A10 10 0 1 0 22 15.9a1 1 0 0 0-1.3-1.3Z"/></svg>
+      </button>
+    </div>
+    <div class="ticket-perf" aria-hidden="true"></div>
+    <div class="header-stats">
+      <div class="stat-block">
+        <span class="stat-label">Dates</span>
+        <span class="stat-value" id="tripDatesLabel">—</span>
+      </div>
+      <div class="stat-block">
+        <span class="stat-label">Trip cost</span>
+        <span class="stat-value" id="tripTotalCost">—</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== Views ===== -->
+  <main id="views">
+
+    <section id="view-itinerary" class="view is-active">
+      <div class="day-selector" id="daySelectorItinerary"></div>
+      <div id="dayContent" class="day-content"></div>
+    </section>
+
+    <section id="view-daymap" class="view">
+      <div class="day-selector" id="daySelectorMap"></div>
+      <div id="dayMap" class="map"></div>
+      <p class="map-hint">Stops are connected in the order your day happens.</p>
+    </section>
+
+    <section id="view-tripmap" class="view">
+      <div id="tripMap" class="map"></div>
+      <div id="tripMapLegend" class="map-legend"></div>
+    </section>
+
+    <section id="view-summary" class="view">
+
+      <div class="panel">
+        <h2>Trip details</h2>
+        <label class="field">
+          <span>Trip name</span>
+          <input id="inputTripName" type="text" placeholder="My trip" />
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Start date</span>
+            <input id="inputStartDate" type="date" />
+          </label>
+          <label class="field">
+            <span>End date</span>
+            <input id="inputEndDate" type="date" />
+          </label>
+        </div>
+        <label class="field field-narrow">
+          <span>Currency symbol</span>
+          <input id="inputCurrency" type="text" maxlength="3" placeholder="$" />
+        </label>
+      </div>
+
+      <div class="panel">
+        <h2>Cost breakdown</h2>
+        <div id="costBreakdown" class="cost-breakdown"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Your data</h2>
+        <p class="panel-note">Saved automatically in this browser. Export a backup before clearing site data or switching devices.</p>
+        <div class="btn-row">
+          <button id="exportBtn" class="btn" type="button">Export JSON</button>
+          <button id="importBtn" class="btn" type="button">Import JSON</button>
+          <input type="file" id="importFile" accept="application/json" hidden />
+        </div>
+        <div class="btn-row">
+          <button id="printBtn" class="btn" type="button">Print itinerary</button>
+          <button id="installBtn" class="btn" type="button" hidden>Install app</button>
+        </div>
+        <div class="btn-row">
+          <button id="clearBtn" class="btn btn-danger" type="button">Clear all data</button>
+        </div>
+      </div>
+
+      <p class="app-footer-note">Maps and location search need an internet connection. The app itself works offline once installed.</p>
+    </section>
+
+  </main>
+
+  <!-- ===== Bottom tab bar ===== -->
+  <nav class="tabbar" id="tabbar">
+    <button class="tab-btn is-active" data-view="itinerary" type="button">
+      <span class="tab-icon">📋</span><span>Itinerary</span>
+    </button>
+    <button class="tab-btn" data-view="daymap" type="button">
+      <span class="tab-icon">📍</span><span>Day map</span>
+    </button>
+    <button class="tab-btn" data-view="tripmap" type="button">
+      <span class="tab-icon">🗺️</span><span>Trip map</span>
+    </button>
+    <button class="tab-btn" data-view="summary" type="button">
+      <span class="tab-icon">⚙️</span><span>Summary</span>
+    </button>
+  </nav>
+
+  <button id="addEventBtn" class="fab" type="button" aria-label="Add event">+</button>
+</div>
+
+<!-- ===== Event modal ===== -->
+<div id="eventModal" class="modal-backdrop is-hidden">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-header">
+      <h2 id="modalTitle">Add event</h2>
+      <button type="button" class="icon-btn" id="closeModalBtn" aria-label="Close">✕</button>
+    </div>
+
+    <form id="eventForm" class="modal-body">
+      <input type="hidden" id="eventId" />
+
+      <label class="field">
+        <span>Event name</span>
+        <input id="eventName" type="text" required placeholder="e.g. Flight to Tokyo" />
+      </label>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Category</span>
+          <select id="eventCategory"></select>
+        </label>
+        <label class="field">
+          <span>Date</span>
+          <input id="eventDate" type="date" required />
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span>Start time</span>
+          <input id="eventStart" type="time" />
+        </label>
+        <label class="field">
+          <span>End time</span>
+          <input id="eventEnd" type="time" />
+        </label>
+      </div>
+
+      <div class="locate-search">
+        <label class="field">
+          <span>Find a place (optional)</span>
+          <div class="search-row">
+            <input id="geocodeQuery" type="text" placeholder="Search for a place or address" />
+            <button type="button" id="geocodeBtn" class="btn btn-small">Search</button>
+          </div>
+        </label>
+        <ul id="geocodeResults" class="geocode-results"></ul>
+      </div>
+
+      <div class="locate-target">
+        <span>Setting location for:</span>
+        <label><input type="radio" name="locateTarget" value="dep" checked /> Departure / place</label>
+        <label id="arrTargetLabel" class="is-hidden"><input type="radio" name="locateTarget" value="arr" /> Arrival</label>
+      </div>
+
+      <div id="pickerMap" class="map map-small"></div>
+
+      <div class="field">
+        <span>Location name</span>
+        <input id="depName" type="text" placeholder="e.g. Shibuya Sky" />
+      </div>
+      <div class="field-row coord-row">
+        <label class="field">
+          <span>Latitude</span>
+          <input id="depLat" type="number" step="any" />
+        </label>
+        <label class="field">
+          <span>Longitude</span>
+          <input id="depLon" type="number" step="any" />
+        </label>
+      </div>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="hasArrival" />
+        <span>This event has separate arrival &amp; departure points (flight, train, transfer)</span>
+      </label>
+
+      <div id="arrivalFields" class="is-hidden">
+        <div class="field">
+          <span>Arrival location name</span>
+          <input id="arrName" type="text" placeholder="e.g. Narita Airport" />
+        </div>
+        <div class="field-row coord-row">
+          <label class="field">
+            <span>Latitude</span>
+            <input id="arrLat" type="number" step="any" />
+          </label>
+          <label class="field">
+            <span>Longitude</span>
+            <input id="arrLon" type="number" step="any" />
+          </label>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span id="costLabel">Ticket cost</span>
+          <input id="eventCost" type="number" step="0.01" min="0" placeholder="0.00" />
+        </label>
+        <label class="field">
+          <span>Dress attire</span>
+          <input id="eventAttire" type="text" placeholder="e.g. Smart casual" />
+        </label>
+      </div>
+
+      <label class="field">
+        <span>Notes</span>
+        <textarea id="eventNotes" rows="3" placeholder="Confirmation numbers, reminders, anything else"></textarea>
+      </label>
+
+      <div class="modal-footer">
+        <button type="button" id="deleteEventBtn" class="btn btn-danger is-hidden">Delete</button>
+        <div class="modal-footer-right">
+          <button type="button" id="cancelModalBtn" class="btn">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save event</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="printView" class="print-only"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

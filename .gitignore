@@ -1,0 +1,21 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local env / secrets (not used by this app, but ignored just in case)
+.env
+.env.local
+
+# If you ever add tooling later
+node_modules/
+npm-debug.log*
+__pycache__/
+*.pyc
+
+# Local server artifacts
+*.log
