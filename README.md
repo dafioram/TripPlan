@@ -8,23 +8,52 @@ map — either one day at a time or your whole trip at once.
 
 ## Features
 
-- **Itinerary view** — events grouped by day, sorted by time, with cost and attire shown on each card.
+- **Itinerary view** — events grouped by day, in the order they actually happen, with cost, attire and duration on each card. Multi-day events (hotel stays, overnight flights) show a "Staying" / "Arrives" / "Check-out" line on the later days.
+- **Time zones** — every start and end time is stored in the zone where it happens (see below), and you can switch the whole itinerary to show local times or any one zone, such as your home time.
 - **Day map** — every stop for the selected day, connected in the order the day happens (a flight naturally shows as its departure and arrival points).
 - **Trip map** — every location across the whole trip, color-coded by day.
 - **Summary** — trip name/dates/currency, a per-day and total cost breakdown, import/export, print, and install.
 - **Cost totals** — automatic per-day and trip-wide totals.
 - **Works offline once loaded** — installable as an app (PWA); your data is saved in the browser automatically.
 - **Import / export JSON** — back up your itinerary or move it to another device/browser.
+- **Calendar export (.ics)** — add the whole trip to Google Calendar, Apple Calendar or Outlook, with correct times in any zone.
 - **Print-friendly view** — a clean, paper-ready copy of the full itinerary.
 - **Dark mode.**
 
 Flights and transfers are just events where the arrival location differs
 from the departure location — there's no separate "flight" data type needed.
 
+## Time zones
+
+Each event has a **start** (date, time, zone) and an **end** (date, time,
+zone). Times are entered as they'd appear on a ticket or booking, in the local
+time where they happen. For example, a 9:00 PM departure from New York is entered as
+`9:00 PM America/New_York`, and its arrival as `1:05 AM Asia/Tokyo`, two days later.
+
+- **Zones fill in automatically** from the location: pick a departure point
+  and the start zone is set from it; pick an arrival point and the end zone
+  follows. You can always override either.
+- **The end date takes care of itself**: if the end time would fall before
+  the start, it rolls to the next day (or the one after, for long eastbound
+  flights). Once you set the end date yourself, it's left alone.
+- **The form shows each time in the other zones** that matter (the other
+  end of the trip, and your home zone), plus the duration, and warns you
+  if an event ends before it starts.
+- **"Times shown in"** on the itinerary switches the view between local
+  times (default) and any single zone. Times that land on a different
+  calendar day than the one they're listed under get a `+1` / `−1` marker.
+- Your **home time zone** is set in Summary. It's the default for events
+  without a location.
+- Trips that never leave one zone show plain times without zone labels.
+
+Itineraries saved before time zones were added are upgraded on load. Each
+event gets a zone from its coordinates, or your home zone if it has none, and
+overnight events get the right end date.
+
 ## Deploying to GitHub Pages
 
 1. Create a new GitHub repository and add all the files in this folder to it
-   (`index.html`, `style.css`, `app.js`, `manifest.json`, `sw.js`, `icons/`).
+   (`index.html`, `style.css`, `app.js`, `manifest.json`, `sw.js`, `icons/`, `vendor/`).
 2. Push to GitHub.
 3. In the repo, go to **Settings → Pages**.
 4. Under "Build and deployment", set **Source** to "Deploy from a branch",
@@ -57,3 +86,7 @@ then visit `http://localhost:8080`.
   to bring it into another browser or device.
 - Coordinates can be set by clicking the small map in the event form,
   searching for a place by name, or typing latitude/longitude directly.
+
+## Third-party code
+
+- [tz-lookup](https://github.com/darkskyapp/tz-lookup) 6.1.25 — CC0 (`vendor/tz-lookup/LICENSE`)
