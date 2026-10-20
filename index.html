@@ -87,12 +87,25 @@
             <span>Home time zone</span>
             <select id="inputHomeTz" class="tz-select"></select>
           </label>
-          <label class="field field-narrow">
-            <span>Currency symbol</span>
-            <input id="inputCurrency" type="text" maxlength="3" placeholder="$" />
+          <label class="field">
+            <span>Home currency</span>
+            <select id="inputCurrency"></select>
           </label>
         </div>
-        <p class="panel-note">Each event keeps the local time where it happens. Your home zone is the default for new events without a location, and is shown alongside local times when they differ.</p>
+        <div class="assumed-note" id="currencyAssumedNote" hidden>
+          <p>Your costs were entered before currencies were supported, so they're being treated as <b id="assumedCurrency">USD</b>. If that's wrong, pick the right home currency above and your existing costs will switch with it.</p>
+          <button id="keepCurrencyBtn" class="btn btn-small" type="button">That's right</button>
+        </div>
+        <p class="panel-note">Each event keeps the local time where it happens. Your home zone is the default for new events without a location, and is shown alongside local times when they differ. Totals are shown in your home currency.</p>
+      </div>
+
+      <div class="panel" id="ratesPanel" hidden>
+        <h2>Exchange rates</h2>
+        <div id="ratesList" class="rates-list"></div>
+        <p class="panel-note rates-status" id="ratesStatus"></p>
+        <div class="btn-row">
+          <button id="refreshRatesBtn" class="btn btn-small" type="button">Refresh rates</button>
+        </div>
       </div>
 
       <div class="panel">
@@ -259,16 +272,19 @@
         </div>
       </div>
 
-      <div class="field-row">
-        <label class="field">
-          <span id="costLabel">Ticket cost</span>
-          <input id="eventCost" type="number" step="0.01" min="0" placeholder="0.00" />
-        </label>
-        <label class="field">
-          <span>Dress attire</span>
-          <input id="eventAttire" type="text" placeholder="e.g. Smart casual" />
-        </label>
+      <div class="field">
+        <span>Cost</span>
+        <div class="cost-input-row">
+          <input id="eventCost" type="number" step="0.01" min="0" inputmode="decimal" placeholder="0.00" aria-label="Cost amount" />
+          <select id="eventCostCurrency" aria-label="Currency"></select>
+        </div>
+        <div id="costPreview" class="cost-preview"></div>
       </div>
+
+      <label class="field">
+        <span>Dress attire</span>
+        <input id="eventAttire" type="text" placeholder="e.g. Smart casual" />
+      </label>
 
       <label class="field">
         <span>Notes</span>

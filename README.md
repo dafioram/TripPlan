@@ -12,8 +12,9 @@ map — either one day at a time or your whole trip at once.
 - **Time zones** — every start and end time is stored in the zone where it happens (see below), and you can switch the whole itinerary to show local times or any one zone, such as your home time.
 - **Day map** — every stop for the selected day, connected in the order the day happens (a flight naturally shows as its departure and arrival points).
 - **Trip map** — every location across the whole trip, color-coded by day.
-- **Summary** — trip name/dates/currency, a per-day and total cost breakdown, import/export, print, and install.
+- **Summary** — trip name, dates, home zone and currency, exchange rates, a per-currency and per-day cost breakdown, import/export, print, and install.
 - **Cost totals** — automatic per-day and trip-wide totals.
+- **Multiple currencies** — enter each cost in the currency it was quoted in; totals convert to your home currency (see below).
 - **Works offline once loaded** — installable as an app (PWA); your data is saved in the browser automatically.
 - **Import / export JSON** — back up your itinerary or move it to another device/browser.
 - **Calendar export (.ics)** — add the whole trip to Google Calendar, Apple Calendar or Outlook, with correct times in any zone.
@@ -49,6 +50,34 @@ time where they happen. For example, a 9:00 PM departure from New York is entere
 Itineraries saved before time zones were added are upgraded on load. Each
 event gets a zone from its coordinates, or your home zone if it has none, and
 overnight events get the right end date.
+
+## Currencies
+
+Each cost keeps the amount and currency it was quoted in (`¥3,200`), and
+totals are shown in the trip's **home currency** (set in Summary).
+
+- **The currency picker remembers the last one you used**, so you only pick
+  yen once per trip.
+- **Cards show both**: `¥3,200 ≈ $21.45`. Day and trip totals are prefixed
+  with `≈` whenever anything was converted.
+- **Exchange rates** are fetched automatically when you're online
+  (European Central Bank reference rates via
+  [Frankfurter](https://frankfurter.dev), no account needed). They're saved
+  with the trip, so totals work offline, and refresh at most every 12 hours.
+- **Type a rate to use your own**, such as what your card actually charged.
+  Rates you enter are marked "yours" and never overwritten; clear one to go
+  back to automatic.
+- **Nothing is guessed**: a currency with no rate (the ECB covers about 30)
+  is listed separately in totals, e.g. `≈ $1,980.00 + ₫500,000`, until you
+  enter a rate for it.
+- **Summary breaks spending down by currency**, which also tells you how
+  much of each you'll need.
+- Changing the home currency re-expresses the saved rates; it doesn't change
+  any costs.
+
+Itineraries saved before currencies existed had a free-text symbol. It's
+mapped to a currency (`€` → EUR, `$` → USD, …) and Summary asks once
+whether that's right. Picking a different one relabels the old costs.
 
 ## Deploying to GitHub Pages
 
@@ -96,8 +125,8 @@ then visit `http://localhost:8080`.
 
 ## Notes
 
-- New map areas (OpenStreetMap tiles) and the place search box need an
-  internet connection. Everything else works offline once the app has been
+- New map areas (OpenStreetMap tiles), the place search box and exchange
+  rate updates need an internet connection. Everything else works offline once the app has been
   loaded once.
 - Data is stored in this browser's `localStorage` only — it isn't synced
   anywhere. Use **Export JSON** regularly as a backup, and **Import JSON**

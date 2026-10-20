@@ -1,6 +1,6 @@
 // Bump VERSION on each release so installed copies pick up the new shell and
 // the page shows its "updated" prompt.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL_CACHE = `trip-shell-${VERSION}`;
 const TILE_CACHE = 'trip-tiles-v1';
 const TILE_LIMIT = 600;

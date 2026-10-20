@@ -191,9 +191,236 @@ function populateTzSelect(sel, value) {
   sel.value = isValidTz(value) ? value : state.trip.homeTz;
 }
 
-function money(amount, symbol) {
+/* =========================================================
+   Currencies
+   Each cost keeps the amount and currency it was quoted in (¥3,200).
+   Totals convert to the trip's home currency using the trip's saved
+   rates table, stored as units of each currency per 1 home unit.
+   ========================================================= */
+const RATES_URL = 'https://api.frankfurter.dev/v1/latest?base=EUR';
+const RATES_MAX_AGE = 12 * 60 * 60 * 1000;
+
+const FALLBACK_CURRENCIES = [
+  'USD', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'NZD', 'CHF', 'CNY', 'HKD', 'SGD', 'KRW',
+  'INR', 'THB', 'VND', 'IDR', 'PHP', 'MYR', 'TWD', 'MXN', 'BRL', 'SEK', 'NOK', 'DKK',
+  'PLN', 'CZK', 'HUF', 'TRY', 'AED', 'ZAR', 'ILS', 'ISK',
+];
+
+// Old saves stored a free-text symbol; map the common ones to a currency.
+const SYMBOL_TO_CURRENCY = {
+  '$': 'USD', 'US$': 'USD', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '円': 'JPY', '₩': 'KRW',
+  '₹': 'INR', '฿': 'THB', '₫': 'VND', '₱': 'PHP', '₺': 'TRY', '₪': 'ILS', 'zł': 'PLN',
+  'R$': 'BRL', 'C$': 'CAD', 'CA$': 'CAD', 'A$': 'AUD', 'AU$': 'AUD', 'NZ$': 'NZD',
+  'HK$': 'HKD', 'S$': 'SGD', 'MX$': 'MXN', 'Fr': 'CHF',
+};
+
+const moneyFormatters = new Map();
+function moneyFormatter(code) {
+  if (!moneyFormatters.has(code)) {
+    moneyFormatters.set(code, new Intl.NumberFormat(undefined, { style: 'currency', currency: code }));
+  }
+  return moneyFormatters.get(code);
+}
+
+function isValidCurrency(code) {
+  if (!/^[A-Z]{3}$/.test(code || '')) return false;
+  try { moneyFormatter(code); return true; } catch (e) { return false; }
+}
+
+// Currency-aware formatting: "$12.50", "¥3,200" (yen has no decimals).
+function money(amount, code = state.trip.currency) {
   const n = Number(amount) || 0;
-  return `${symbol || '$'}${n.toFixed(2)}`;
+  try { return moneyFormatter(code).format(n); } catch (e) { return `${code} ${n.toFixed(2)}`; }
+}
+
+function currencyDigits(code) {
+  try { return moneyFormatter(code).resolvedOptions().maximumFractionDigits; } catch (e) { return 2; }
+}
+
+let currencyNames = null;
+function currencyName(code) {
+  try {
+    if (!currencyNames) currencyNames = new Intl.DisplayNames(undefined, { type: 'currency' });
+    return currencyNames.of(code);
+  } catch (e) { return code; }
+}
+
+function toCurrencyCode(value) {
+  const v = String(value ?? '').trim();
+  if (isValidCurrency(v.toUpperCase())) return v.toUpperCase();
+  return SYMBOL_TO_CURRENCY[v] || 'USD';
+}
+
+let allCurrenciesCache = null;
+function allCurrencies() {
+  if (!allCurrenciesCache) {
+    let list = [];
+    try { list = Intl.supportedValuesOf('currency'); } catch (e) { list = FALLBACK_CURRENCIES; }
+    allCurrenciesCache = list.filter(isValidCurrency);
+  }
+  return allCurrenciesCache;
+}
+
+function usedCurrencies() {
+  const set = new Set();
+  (state.trip?.events || []).forEach((e) => { if (Number(e.cost)) set.add(e.costCurrency || state.trip.currency); });
+  return set;
+}
+
+let allCurrencyOptionsHtml = null;
+function populateCurrencySelect(sel, value) {
+  const t = state.trip;
+  const suggested = [...new Set([t.currency, t.lastCurrency, ...usedCurrencies(), value].filter(isValidCurrency))];
+  const opt = (c) => `<option value="${c}">${c} — ${escapeHtml(currencyName(c))}</option>`;
+  if (!allCurrencyOptionsHtml) allCurrencyOptionsHtml = allCurrencies().map(opt).join('');
+  sel.innerHTML = `<optgroup label="Suggested">${suggested.map(opt).join('')}</optgroup>`
+    + `<optgroup label="All currencies">${allCurrencyOptionsHtml}</optgroup>`;
+  sel.value = isValidCurrency(value) ? value : t.currency;
+}
+
+// Units of `code` per 1 home unit, or null when there's no rate yet.
+function rateFor(code) {
+  if (code === state.trip.currency) return 1;
+  const v = state.trip.rates.values[code];
+  return v > 0 ? v : null;
+}
+
+function toHome(amount, code) {
+  const r = rateFor(code);
+  return r ? amount / r : null;
+}
+
+function formatRate(v) {
+  return String(Number(v.toPrecision(6)));
+}
+
+// Rates read the natural way round: "1 USD = 150 JPY" whether home is
+// dollars or yen, never "1 JPY = 0.00667 USD".
+function rateInverted(code) {
+  const r = rateFor(code);
+  return r !== null && r < 1;
+}
+
+function rateText(code) {
+  const r = rateFor(code), home = state.trip.currency;
+  return rateInverted(code) ? `1 ${code} = ${formatRate(1 / r)} ${home}` : `1 ${home} = ${formatRate(r)} ${code}`;
+}
+
+// Totals in home currency. Anything without a rate is listed separately
+// rather than guessed: "≈ $1,980.00 + ₫500,000".
+function costSummary(events) {
+  let home = 0, converted = false;
+  const missing = {};
+  events.forEach((e) => {
+    const amt = Number(e.cost) || 0;
+    if (!amt) return;
+    const code = e.costCurrency || state.trip.currency;
+    const h = toHome(amt, code);
+    if (h === null) missing[code] = (missing[code] || 0) + amt;
+    else { home += h; if (code !== state.trip.currency) converted = true; }
+  });
+  return { home, converted, missing };
+}
+
+function costSummaryText(sum) {
+  const extra = Object.entries(sum.missing).map(([c, a]) => money(a, c));
+  const base = (sum.converted ? '≈ ' : '') + money(sum.home);
+  return extra.length ? [sum.home ? base : null, ...extra].filter(Boolean).join(' + ') : base;
+}
+
+// "¥3,200" plus "≈ $21.45" when it's not in home currency.
+function costParts(e) {
+  const code = e.costCurrency || state.trip.currency;
+  const original = money(e.cost, code);
+  const h = code === state.trip.currency ? null : toHome(Number(e.cost) || 0, code);
+  return { original, approx: h === null ? '' : `≈ ${money(h)}` };
+}
+
+// Change the home currency, re-expressing saved rates against it. Rates
+// that can't be bridged are dropped and fetched again.
+function rebaseRates(newHome) {
+  const t = state.trip;
+  const r = t.rates;
+  const pivot = newHome === t.currency ? 1 : r.values[newHome];
+  const values = {}, manual = {};
+  if (pivot > 0) {
+    Object.entries(r.values).forEach(([c, v]) => {
+      if (c !== newHome && v > 0) { values[c] = v / pivot; if (r.manual[c]) manual[c] = true; }
+    });
+    if (t.currency !== newHome) {
+      values[t.currency] = 1 / pivot;
+      if (r.manual[newHome]) manual[t.currency] = true;
+    }
+  }
+  t.rates = { ...r, base: newHome, values, manual };
+  t.currency = newHome;
+}
+
+function normalizeRates(r, home) {
+  const rates = {
+    base: home,
+    values: {},
+    manual: {},
+    date: r && typeof r.date === 'string' ? r.date : null,
+    fetchedAt: (r && Number(r.fetchedAt)) || 0,
+  };
+  if (r && r.values && typeof r.values === 'object') {
+    Object.entries(r.values).forEach(([c, v]) => {
+      if (isValidCurrency(c) && Number(v) > 0 && c !== home) rates.values[c] = Number(v);
+    });
+    Object.keys(r.manual || {}).forEach((c) => { if (rates.values[c]) rates.manual[c] = true; });
+  }
+  return rates;
+}
+
+let ratesInFlight = null;
+let ratesLastAttempt = 0;
+
+// Fetch European Central Bank reference rates (via Frankfurter, no key
+// needed). Rates you typed in yourself are never overwritten.
+function refreshRates({ force = false } = {}) {
+  const t = state.trip;
+  const foreign = [...usedCurrencies()].filter((c) => c !== t.currency && !t.rates.manual[c]);
+  if (!foreign.length && !force) return Promise.resolve(false);
+  if (ratesInFlight) return ratesInFlight;
+  if (!force) {
+    const stale = Date.now() - t.rates.fetchedAt > RATES_MAX_AGE;
+    const missing = foreign.some((c) => !rateFor(c));
+    // Don't retry a failed or partial fetch on every render.
+    if (!(stale || missing) || Date.now() - ratesLastAttempt < 10 * 60 * 1000) return Promise.resolve(false);
+  }
+  if (!navigator.onLine) return Promise.resolve(false);
+  ratesLastAttempt = Date.now();
+
+  ratesInFlight = fetch(RATES_URL)
+    .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+    .then((data) => {
+      const eur = { ...data.rates, EUR: 1 };
+      const home = state.trip.currency;
+      const r = state.trip.rates;
+      if (!(eur[home] > 0)) {
+        r.error = `Automatic rates aren't available for ${home}. Enter rates by hand below.`;
+        return false;
+      }
+      Object.entries(eur).forEach(([c, v]) => {
+        if (c !== home && v > 0 && isValidCurrency(c) && !r.manual[c]) r.values[c] = v / eur[home];
+      });
+      r.date = data.date || null;
+      r.fetchedAt = Date.now();
+      delete r.error;
+      return true;
+    })
+    .catch(() => {
+      state.trip.rates.error = 'Couldn’t reach the exchange-rate service. Showing the last saved rates.';
+      return false;
+    })
+    .then((changed) => {
+      ratesInFlight = null;
+      saveTrip();
+      refreshAll({ skipRates: true });
+      return changed;
+    });
+  return ratesInFlight;
 }
 
 function hasCoords(lat, lon) {
@@ -229,7 +456,10 @@ function sampleTrip() {
   const LA = 'America/Los_Angeles', TYO = 'Asia/Tokyo';
   return {
     tripName: 'Tokyo Long Weekend',
-    currency: '$',
+    currency: 'USD',
+    lastCurrency: 'JPY',
+    // Approximate until the first refresh replaces it with today's rate.
+    rates: { base: 'USD', values: { JPY: 150 }, manual: {}, date: null, fetchedAt: 0 },
     homeTz: LA,
     displayTz: 'local',
     startDate: d1,
@@ -241,7 +471,7 @@ function sampleTrip() {
         endDate: d2, endTime: '13:35', endTz: TYO, hasArrival: true,
         depName: 'San Francisco Intl (SFO)', depLat: 37.6213, depLon: -122.3790,
         arrName: 'Narita Airport (NRT)', arrLat: 35.7719, arrLon: 140.3929,
-        cost: 780, attire: '', notes: 'Terminal 2, seat 24A. Confirmation ABC123.',
+        cost: 780, costCurrency: 'USD', attire: '', notes: 'Terminal 2, seat 24A. Confirmation ABC123.',
       },
       {
         id: uid(), name: 'Park Hyatt Tokyo', category: 'hotel',
@@ -249,7 +479,7 @@ function sampleTrip() {
         endDate: d3, endTime: '11:00', endTz: TYO, hasArrival: false,
         depName: 'Park Hyatt Tokyo', depLat: 35.6938, depLon: 139.6897,
         arrName: 'Park Hyatt Tokyo', arrLat: 35.6938, arrLon: 139.6897,
-        cost: 420, attire: '', notes: 'Ask for a room on a high floor.',
+        cost: 63000, costCurrency: 'JPY', attire: '', notes: 'Ask for a room on a high floor.',
       },
       {
         id: uid(), name: 'Dinner at Gonpachi Nishiazabu', category: 'food',
@@ -257,7 +487,7 @@ function sampleTrip() {
         endDate: d2, endTime: '21:00', endTz: TYO, hasArrival: false,
         depName: 'Gonpachi Nishiazabu', depLat: 35.6586, depLon: 139.7280,
         arrName: 'Gonpachi Nishiazabu', arrLat: 35.6586, arrLon: 139.7280,
-        cost: 90, attire: 'Smart casual', notes: 'Reservation under trip name.',
+        cost: 13500, costCurrency: 'JPY', attire: 'Smart casual', notes: 'Reservation under trip name.',
       },
       {
         id: uid(), name: 'Shibuya Sky observation deck', category: 'activity',
@@ -265,7 +495,7 @@ function sampleTrip() {
         endDate: d3, endTime: '12:00', endTz: TYO, hasArrival: false,
         depName: 'Shibuya Sky', depLat: 35.6595, depLon: 139.7005,
         arrName: 'Shibuya Sky', arrLat: 35.6595, arrLon: 139.7005,
-        cost: 22, attire: '', notes: 'Book timed-entry tickets in advance.',
+        cost: 3400, costCurrency: 'JPY', attire: '', notes: 'Book timed-entry tickets in advance.',
       },
       {
         id: uid(), name: 'Flight home (Haneda)', category: 'flight',
@@ -273,7 +503,7 @@ function sampleTrip() {
         endDate: d3, endTime: '11:50', endTz: LA, hasArrival: true,
         depName: 'Haneda Airport (HND)', depLat: 35.5494, depLon: 139.7798,
         arrName: 'San Francisco Intl (SFO)', arrLat: 37.6213, arrLon: -122.3790,
-        cost: 780, attire: '', notes: 'Lands "before" it leaves — you cross the date line.',
+        cost: 780, costCurrency: 'USD', attire: '', notes: 'Lands "before" it leaves — you cross the date line.',
       },
     ],
   };
@@ -281,7 +511,11 @@ function sampleTrip() {
 
 function emptyTrip() {
   const t = todayLocalISO();
-  return { tripName: 'New Trip', currency: '$', homeTz: DEVICE_TZ, displayTz: 'local', startDate: t, endDate: t, events: [] };
+  const currency = state.trip?.currency || 'USD';
+  return {
+    tripName: 'New Trip', currency, lastCurrency: currency, rates: normalizeRates(null, currency),
+    homeTz: DEVICE_TZ, displayTz: 'local', startDate: t, endDate: t, events: [],
+  };
 }
 
 /* =========================================================
@@ -311,7 +545,7 @@ function loadTrip() {
   } catch (e) {
     console.warn('Could not read saved trip, starting fresh.', e);
   }
-  return sampleTrip();
+  return normalizeTrip(sampleTrip());
 }
 
 function saveTrip() {
@@ -325,10 +559,16 @@ function saveTrip() {
 // Fills in fields added after v1 so older saves and imports keep working.
 // Events saved before time zones existed get a zone from their location
 // (falling back to the home zone), and overnight events get an end date.
+// A pre-currency symbol ('$') becomes a code, flagged so Summary can ask
+// whether the guess is right.
 function normalizeTrip(t) {
+  const currency = toCurrencyCode(t.currency);
   const trip = {
     tripName: t.tripName || 'Trip',
-    currency: t.currency || '$',
+    currency,
+    currencyAssumed: !!t.currencyAssumed || !isValidCurrency(String(t.currency || '')),
+    lastCurrency: isValidCurrency(t.lastCurrency) ? t.lastCurrency : currency,
+    rates: normalizeRates(t.rates, currency),
     homeTz: isValidTz(t.homeTz) ? t.homeTz : DEVICE_TZ,
     displayTz: t.displayTz === 'local' || isValidTz(t.displayTz) ? t.displayTz : 'local',
     startDate: t.startDate || todayLocalISO(),
@@ -344,6 +584,7 @@ function normalizeEvent(raw, trip) {
   const e = { ...raw };
   if (!e.id) e.id = uid();
   if (!CATEGORIES[e.category]) e.category = 'other';
+  if (!isValidCurrency(e.costCurrency)) e.costCurrency = trip.currency;
   if (typeof e.hasArrival !== 'boolean') e.hasArrival = isTransfer(e);
   if (!isValidTz(e.startTz)) e.startTz = tzFromCoords(e.depLat, e.depLon) || trip.homeTz;
   if (!isValidTz(e.endTz)) e.endTz = (e.hasArrival && tzFromCoords(e.arrLat, e.arrLon)) || e.startTz;
@@ -447,11 +688,11 @@ function dayTimeline(date) {
 }
 
 function dayTotalCost(date) {
-  return eventsForDay(date).reduce((sum, e) => sum + (Number(e.cost) || 0), 0);
+  return costSummaryText(costSummary(eventsForDay(date)));
 }
 
 function tripTotalCost() {
-  return state.trip.events.reduce((sum, e) => sum + (Number(e.cost) || 0), 0);
+  return costSummaryText(costSummary(state.trip.events));
 }
 
 /* =========================================================
@@ -468,7 +709,7 @@ function renderHeader() {
   } else {
     $('#tripDatesLabel').textContent = '—';
   }
-  $('#tripTotalCost').textContent = money(tripTotalCost(), t.currency);
+  $('#tripTotalCost').textContent = tripTotalCost();
 }
 
 /* =========================================================
@@ -538,7 +779,7 @@ function renderItineraryView() {
   }
   const items = dayTimeline(date);
 
-  let html = `<div class="day-heading"><h2>${formatDateLong(date)}</h2><span class="day-total">${money(dayTotalCost(date), state.trip.currency)}</span></div>`;
+  let html = `<div class="day-heading"><h2>${formatDateLong(date)}</h2><span class="day-total">${dayTotalCost(date)}</span></div>`;
 
   if (!items.length) {
     html += '<div class="empty-state"><span class="empty-emoji">🌤️</span>Nothing planned yet for this day.</div>';
@@ -570,7 +811,10 @@ function eventCardHtml(e, groupDay) {
   const nights = daysBetween(e.date, e.endDate || e.date);
   if (e.category === 'hotel' && nights > 0) meta += `<span class="chip">🌙 ${nights} night${nights > 1 ? 's' : ''}</span>`;
   else if (start && end) meta += `<span class="chip">⏱ ${formatDuration(endEpoch(e) - startEpoch(e))}</span>`;
-  if (e.cost) meta += `<span class="chip chip-cost">${money(e.cost, state.trip.currency)}</span>`;
+  if (e.cost) {
+    const c = costParts(e);
+    meta += `<span class="chip chip-cost">${c.original}${c.approx ? ` <span class="chip-approx">${c.approx}</span>` : ''}</span>`;
+  }
   if (e.attire) meta += `<span class="chip">👔 ${escapeHtml(e.attire)}</span>`;
 
   return `
@@ -751,10 +995,13 @@ function updateTripMap() {
 function renderSummaryView() {
   const t = state.trip;
   $('#inputTripName').value = t.tripName || '';
-  $('#inputCurrency').value = t.currency || '$';
   $('#inputStartDate').value = t.startDate || '';
   $('#inputEndDate').value = t.endDate || '';
   populateTzSelect($('#inputHomeTz'), t.homeTz);
+  populateCurrencySelect($('#inputCurrency'), t.currency);
+  $('#currencyAssumedNote').hidden = !t.currencyAssumed;
+  $('#assumedCurrency').textContent = t.currency;
+  renderRatesPanel();
 
   const days = getDayList();
   const box = $('#costBreakdown');
@@ -762,19 +1009,65 @@ function renderSummaryView() {
     box.innerHTML = '<p class="panel-note">No days yet.</p>';
   } else {
     let html = '';
-    days.forEach((date, i) => {
-      html += `<div class="cost-row"><span>Day ${i + 1} · ${formatDateShort(date)}</span><span class="amount">${money(dayTotalCost(date), t.currency)}</span></div>`;
+    // Per-currency subtotals: "how much yen will I spend?"
+    const byCurrency = {};
+    t.events.forEach((e) => {
+      const amt = Number(e.cost) || 0;
+      if (amt) byCurrency[e.costCurrency] = (byCurrency[e.costCurrency] || 0) + amt;
     });
-    html += `<div class="cost-row cost-total"><span>Trip total</span><span class="amount">${money(tripTotalCost(), t.currency)}</span></div>`;
+    const codes = Object.keys(byCurrency);
+    if (codes.length > 1 || (codes.length === 1 && codes[0] !== t.currency)) {
+      codes.sort((a, b) => (a === t.currency ? -1 : b === t.currency ? 1 : a.localeCompare(b)));
+      codes.forEach((c) => {
+        const h = c === t.currency ? null : toHome(byCurrency[c], c);
+        html += `<div class="cost-row"><span>${c} · ${escapeHtml(currencyName(c))}</span><span class="amount">${money(byCurrency[c], c)}${h !== null ? ` <span class="muted">≈ ${money(h)}</span>` : ''}</span></div>`;
+      });
+      html += '<div class="cost-subhead">By day</div>';
+    }
+    days.forEach((date, i) => {
+      html += `<div class="cost-row"><span>Day ${i + 1} · ${formatDateShort(date)}</span><span class="amount">${dayTotalCost(date)}</span></div>`;
+    });
+    html += `<div class="cost-row cost-total"><span>Trip total</span><span class="amount">${tripTotalCost()}</span></div>`;
     box.innerHTML = html;
   }
+}
+
+function renderRatesPanel() {
+  const t = state.trip;
+  const foreign = [...usedCurrencies()].filter((c) => c !== t.currency).sort();
+  $('#ratesPanel').hidden = !foreign.length;
+  if (!foreign.length) return;
+  const r = t.rates;
+  $('#ratesList').innerHTML = foreign.map((c) => {
+    const v = rateFor(c);
+    const tag = r.manual[c] ? 'yours' : v ? 'auto' : 'missing';
+    const inv = rateInverted(c);
+    return `<label class="rate-row">
+      <span>1 ${inv ? c : t.currency} =</span>
+      <input type="number" step="any" min="0" inputmode="decimal" data-cur="${c}" data-inverted="${inv}" value="${v ? formatRate(inv ? 1 / v : v) : ''}" placeholder="enter rate" />
+      <span>${inv ? t.currency : c}</span>
+      <span class="rate-tag rate-tag-${tag}">${tag}</span>
+    </label>`;
+  }).join('');
+
+  let status;
+  if (r.error) status = r.error;
+  else if (foreign.some((c) => !rateFor(c))) {
+    status = navigator.onLine
+      ? 'Some currencies have no automatic rate. Type one in to include them in totals.'
+      : 'Connect to the internet to fetch rates, or type them in.';
+  } else if (r.fetchedAt) {
+    status = `Rates from the European Central Bank (via Frankfurter), as of ${r.date ? formatDateShort(r.date) : 'today'}.`;
+  } else {
+    status = 'Approximate rates. Refresh for today’s.';
+  }
+  $('#ratesStatus').textContent = status + ' Type a rate to use your own, such as what your card charged; clear it to go back to automatic.';
 }
 
 function bindSummaryInputs() {
   const onChange = () => {
     const t = state.trip;
     t.tripName = $('#inputTripName').value.trim() || 'Trip';
-    t.currency = $('#inputCurrency').value.trim() || '$';
     t.startDate = $('#inputStartDate').value || t.startDate;
     t.endDate = $('#inputEndDate').value || t.endDate;
     if (t.endDate < t.startDate) [t.startDate, t.endDate] = [t.endDate, t.startDate];
@@ -782,8 +1075,49 @@ function bindSummaryInputs() {
     saveTrip();
     refreshAll();
   };
-  ['inputTripName', 'inputCurrency', 'inputStartDate', 'inputEndDate', 'inputHomeTz'].forEach((id) => {
+  ['inputTripName', 'inputStartDate', 'inputEndDate', 'inputHomeTz'].forEach((id) => {
     $('#' + id).addEventListener('change', onChange);
+  });
+
+  $('#inputCurrency').addEventListener('change', (e) => {
+    const t = state.trip;
+    const next = e.target.value;
+    if (!isValidCurrency(next) || next === t.currency) return;
+    if (t.currencyAssumed) {
+      // The old symbol was guessed wrong: the existing costs were really
+      // in the newly picked currency, so relabel them rather than convert.
+      t.events.forEach((ev) => { if (ev.costCurrency === t.currency) ev.costCurrency = next; });
+      if (t.lastCurrency === t.currency) t.lastCurrency = next;
+      t.currency = next;
+      t.rates = normalizeRates(null, next);
+      t.currencyAssumed = false;
+    } else {
+      rebaseRates(next);
+    }
+    saveTrip();
+    refreshAll();
+  });
+  $('#keepCurrencyBtn').addEventListener('click', () => {
+    state.trip.currencyAssumed = false;
+    saveTrip();
+    renderSummaryView();
+  });
+
+  $('#refreshRatesBtn').addEventListener('click', () => {
+    $('#ratesStatus').textContent = 'Fetching today’s rates…';
+    refreshRates({ force: true });
+  });
+  // Typing a rate makes it yours; clearing it goes back to automatic.
+  $('#ratesList').addEventListener('change', (e) => {
+    const code = e.target.dataset.cur;
+    if (!code) return;
+    const r = state.trip.rates;
+    const v = parseFloat(e.target.value);
+    if (v > 0) { r.values[code] = e.target.dataset.inverted === 'true' ? 1 / v : v; r.manual[code] = true; }
+    else { delete r.values[code]; delete r.manual[code]; ratesLastAttempt = 0; }
+    saveTrip();
+    // 'change' fires on blur; re-render after the focus change finishes.
+    setTimeout(refreshAll, 0);
   });
 
   $('#tzDisplaySelect').addEventListener('change', (e) => {
@@ -862,7 +1196,8 @@ function openModal(eventId, { duplicateOf = null } = {}) {
     $('#depName').value = e.depName || '';
     $('#depLat').value = e.depLat ?? '';
     $('#depLon').value = e.depLon ?? '';
-    $('#eventCost').value = e.cost ?? '';
+    $('#eventCost').value = e.cost || '';
+    populateCurrencySelect($('#eventCostCurrency'), e.costCurrency);
     $('#eventAttire').value = e.attire || '';
     $('#eventNotes').value = e.notes || '';
     if (isTransfer(e)) {
@@ -885,12 +1220,14 @@ function openModal(eventId, { duplicateOf = null } = {}) {
     $('#eventDate').value = state.selectedDate || todayLocalISO();
     $('#eventEndDate').value = $('#eventDate').value;
     $('#eventCategory').value = 'activity';
+    populateCurrencySelect($('#eventCostCurrency'), state.trip.lastCurrency);
     populateTzSelect($('#eventStartTz'), tz);
     populateTzSelect($('#eventEndTz'), tz);
     state.form.endDateTouched = false;
   }
   state.form.lastStartDate = $('#eventDate').value;
   updateTimePreview();
+  updateCostPreview();
 
   $('#eventModal').classList.remove('is-hidden');
   setTimeout(initOrResetPickerMap, 50);
@@ -985,6 +1322,26 @@ function bindTimeInputs() {
     autoAdjustEndDate();
     updateTimePreview();
   });
+}
+
+/* ---------- Cost in the form ---------- */
+function updateCostPreview() {
+  const code = $('#eventCostCurrency').value;
+  const amt = parseFloat($('#eventCost').value);
+  const digits = currencyDigits(code);
+  $('#eventCost').step = digits ? String(10 ** -digits) : '1';
+  $('#eventCost').placeholder = (0).toFixed(digits);
+  const box = $('#costPreview');
+  if (!code || code === state.trip.currency || !(amt > 0)) { box.textContent = ''; return; }
+  const r = rateFor(code);
+  box.textContent = r
+    ? `≈ ${money(amt / r)} at ${rateText(code)}`
+    : `No exchange rate for ${code} yet. It'll be fetched when you're online, or you can add one in Summary.`;
+}
+
+function bindCostInputs() {
+  $('#eventCost').addEventListener('input', updateCostPreview);
+  $('#eventCostCurrency').addEventListener('change', updateCostPreview);
 }
 
 // Set the zone from a location just picked, so a flight to Tokyo gets Tokyo
@@ -1149,6 +1506,7 @@ function handleFormSubmit(ev) {
     arrLat: hasArrival && numOrNull('#arrLat') !== null ? numOrNull('#arrLat') : depLat,
     arrLon: hasArrival && numOrNull('#arrLon') !== null ? numOrNull('#arrLon') : depLon,
     cost: numOrNull('#eventCost') || 0,
+    costCurrency: $('#eventCostCurrency').value || state.trip.currency,
     attire: $('#eventAttire').value.trim(),
     notes: $('#eventNotes').value.trim(),
   };
@@ -1156,6 +1514,7 @@ function handleFormSubmit(ev) {
   const idx = state.trip.events.findIndex((x) => x.id === event.id);
   if (idx >= 0) state.trip.events[idx] = event; else state.trip.events.push(event);
 
+  if (event.cost) state.trip.lastCurrency = event.costCurrency;
   extendTripRangeIfNeeded(event.date);
   extendTripRangeIfNeeded(event.endDate);
   state.selectedDate = event.date;
@@ -1274,7 +1633,7 @@ function exportIcs() {
     if (loc) lines.push(`LOCATION:${icsEscape(loc)}`);
     if (hasCoords(e.depLat, e.depLon)) lines.push(`GEO:${Number(e.depLat)};${Number(e.depLon)}`);
     const desc = [
-      e.cost ? `Cost: ${money(e.cost, t.currency)}` : '',
+      e.cost ? `Cost: ${money(e.cost, e.costCurrency)}` : '',
       e.attire ? `Attire: ${e.attire}` : '',
       e.notes || '',
     ].filter(Boolean).join('\n');
@@ -1297,11 +1656,11 @@ function buildPrintView() {
   const days = getDayList();
   const zoneNote = t.displayTz === 'local' ? 'Local times' : `Times in ${tzCity(t.displayTz)}`;
   let html = `<h1>${escapeHtml(t.tripName)}</h1>`;
-  html += `<div class="print-sub">${days.length ? formatDateLong(days[0]) + ' – ' + formatDateLong(days[days.length - 1]) : ''} · Total ${money(tripTotalCost(), t.currency)} · ${escapeHtml(zoneNote)}</div>`;
+  html += `<div class="print-sub">${days.length ? formatDateLong(days[0]) + ' – ' + formatDateLong(days[days.length - 1]) : ''} · Total ${tripTotalCost()} · ${escapeHtml(zoneNote)}</div>`;
 
   days.forEach((date, i) => {
     const items = dayTimeline(date);
-    html += `<div class="print-day"><h2>Day ${i + 1} — ${formatDateLong(date)} · ${money(dayTotalCost(date), t.currency)}</h2>`;
+    html += `<div class="print-day"><h2>Day ${i + 1} — ${formatDateLong(date)} · ${dayTotalCost(date)}</h2>`;
     if (!items.length) html += '<div class="print-event">Nothing planned.</div>';
     items.forEach((it) => {
       const e = it.e;
@@ -1316,7 +1675,7 @@ function buildPrintView() {
       const loc = isTransfer(e) ? `${e.depName || ''} to ${e.arrName || ''}` : (e.depName || '');
       html += `<div class="print-event">
         <span class="pe-title">${cat.icon} ${escapeHtml(e.name)}</span> —
-        <span class="pe-meta">${escapeHtml(time)} · ${escapeHtml(loc)}${e.cost ? ' · ' + money(e.cost, t.currency) : ''}${e.attire ? ' · Attire: ' + escapeHtml(e.attire) : ''}</span>
+        <span class="pe-meta">${escapeHtml(time)} · ${escapeHtml(loc)}${e.cost ? ' · ' + [costParts(e).original, costParts(e).approx].filter(Boolean).join(' ') : ''}${e.attire ? ' · Attire: ' + escapeHtml(e.attire) : ''}</span>
         ${e.notes ? `<div class="pe-meta">${escapeHtml(e.notes)}</div>` : ''}
       </div>`;
     });
@@ -1434,7 +1793,8 @@ function requestPersistentStorage() {
 /* =========================================================
    Refresh everything (after data changes)
    ========================================================= */
-function refreshAll() {
+function refreshAll({ skipRates = false } = {}) {
+  if (!skipRates) refreshRates();
   renderHeader();
   renderDaySelectors();
   renderItineraryView();
@@ -1457,6 +1817,7 @@ function init() {
   bindThemeToggle();
   bindSummaryInputs();
   bindTimeInputs();
+  bindCostInputs();
   bindArrivalToggle();
   bindGeocode();
   bindInstall();
@@ -1485,6 +1846,7 @@ function init() {
   refreshAll();
   registerServiceWorker();
   requestPersistentStorage();
+  window.addEventListener('online', () => refreshRates());
 
   // Home-screen shortcut: "Add event".
   const params = new URLSearchParams(location.search);
