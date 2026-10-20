@@ -63,6 +63,24 @@ overnight events get the right end date.
 
 No build step, bundler, or server is required — it's plain HTML/CSS/JS.
 
+When you deploy changes, bump `VERSION` at the top of `sw.js`. Installed
+copies then fetch the new files and show a "new version is ready — Reload"
+prompt.
+
+## Installing (PWA)
+
+- **Android / desktop Chrome & Edge:** use the **Install app** button in
+  Summary (or the browser's install icon). Long-press the home-screen icon
+  for an "Add event" shortcut.
+- **iPhone / iPad:** open the site in Safari, tap **Share → Add to Home
+  Screen**. (The Install button explains this on iOS.)
+
+Once installed, the whole app works offline: the app files, the Leaflet map
+library and the time zone lookup are all bundled in `vendor/`. Map tiles you've already
+viewed are cached too, so the area around your hotel stays visible without a
+connection. The app also asks the browser to keep its storage persistent,
+so your itinerary isn't cleared to free up space.
+
 ## Running it locally
 
 Opening `index.html` directly by double-clicking it works for basic use, but
@@ -78,9 +96,9 @@ then visit `http://localhost:8080`.
 
 ## Notes
 
-- Map tiles (OpenStreetMap) and the location search box need an internet
-  connection. The app shell itself (your saved itinerary, the list view)
-  works offline once it's been loaded/installed once.
+- New map areas (OpenStreetMap tiles) and the place search box need an
+  internet connection. Everything else works offline once the app has been
+  loaded once.
 - Data is stored in this browser's `localStorage` only — it isn't synced
   anywhere. Use **Export JSON** regularly as a backup, and **Import JSON**
   to bring it into another browser or device.
@@ -89,4 +107,5 @@ then visit `http://localhost:8080`.
 
 ## Third-party code
 
+- [Leaflet](https://leafletjs.com/) 1.9.4 — BSD-2-Clause (`vendor/leaflet/LICENSE`)
 - [tz-lookup](https://github.com/darkskyapp/tz-lookup) 6.1.25 — CC0 (`vendor/tz-lookup/LICENSE`)

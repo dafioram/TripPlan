@@ -6,10 +6,14 @@
 <title>Itinerary</title>
 <meta name="description" content="A pretty, offline-friendly travel itinerary planner." />
 <meta name="theme-color" content="#0E1526" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Itinerary" />
 <link rel="manifest" href="manifest.json" />
 <link rel="icon" href="icons/icon-192.png" />
-<link rel="apple-touch-icon" href="icons/icon-192.png" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -285,7 +289,12 @@
 
 <div id="printView" class="print-only"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden>
+  <span id="toastText"></span>
+  <button type="button" id="toastAction" class="btn btn-small btn-primary" hidden></button>
+</div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/tz-lookup/tz.js"></script>
 <script src="app.js"></script>
 </body>

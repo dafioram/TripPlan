@@ -614,8 +614,10 @@ function continuingRowHtml(it, groupDay) {
    Maps — shared
    ========================================================= */
 function addBaseTiles(map) {
+  // crossOrigin lets the service worker cache viewed tiles for offline use.
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
+    crossOrigin: true,
     attribution: '&copy; OpenStreetMap contributors',
   }).addTo(map);
 }
@@ -1081,6 +1083,7 @@ async function runGeocodeSearch() {
   const q = $('#geocodeQuery').value.trim();
   const list = $('#geocodeResults');
   if (!q) return;
+  if (!navigator.onLine) { list.innerHTML = '<li>Place search needs an internet connection. You can still tap the map or type coordinates.</li>'; return; }
   list.innerHTML = '<li>Searching…</li>';
   try {
     const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`);
@@ -1327,6 +1330,8 @@ function buildPrintView() {
    ========================================================= */
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
+  const meta = $('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', theme === 'dark' ? '#0E1526' : '#FFFFFF');
   try { localStorage.setItem(THEME_KEY, theme); } catch (e) { /* private mode */ }
 }
 
@@ -1346,29 +1351,83 @@ function bindThemeToggle() {
 }
 
 /* =========================================================
-   PWA install prompt
+   Toast
    ========================================================= */
+let toastTimer = null;
+function showToast(text, actionLabel, onAction, ms = 6000) {
+  const toast = $('#toast');
+  $('#toastText').textContent = text;
+  const btn = $('#toastAction');
+  btn.hidden = !actionLabel;
+  btn.textContent = actionLabel || '';
+  btn.onclick = () => { toast.hidden = true; if (onAction) onAction(); };
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  if (ms) toastTimer = setTimeout(() => { toast.hidden = true; }, ms);
+}
+
+/* =========================================================
+   PWA: install prompt, service worker, storage
+   ========================================================= */
+function isStandalone() {
+  return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+}
+
+function isIos() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
 let deferredInstallPrompt = null;
 function bindInstall() {
+  const btn = $('#installBtn');
+  if (isStandalone()) return;
+
+  // iOS Safari has no install prompt; explain the manual steps instead.
+  if (isIos()) {
+    btn.hidden = false;
+    btn.addEventListener('click', () => {
+      alert('To install: tap the Share button in Safari, then "Add to Home Screen".');
+    });
+    return;
+  }
+
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredInstallPrompt = e;
-    $('#installBtn').hidden = false;
+    btn.hidden = false;
   });
-  $('#installBtn').addEventListener('click', async () => {
+  window.addEventListener('appinstalled', () => {
+    deferredInstallPrompt = null;
+    btn.hidden = true;
+  });
+  btn.addEventListener('click', async () => {
     if (!deferredInstallPrompt) return;
     deferredInstallPrompt.prompt();
     await deferredInstallPrompt.userChoice;
     deferredInstallPrompt = null;
-    $('#installBtn').hidden = true;
+    btn.hidden = true;
   });
 }
 
 function registerServiceWorker() {
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
-    });
+  if (!('serviceWorker' in navigator) || !location.protocol.startsWith('http')) return;
+  // A controller at load means this isn't the first install, so a later
+  // controller change is a real update worth announcing.
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController) showToast('A new version is ready.', 'Reload', () => location.reload(), 0);
+  });
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  });
+}
+
+// Ask the browser not to evict saved trips under storage pressure (matters
+// most on iOS, which otherwise clears data for sites not opened recently).
+function requestPersistentStorage() {
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage.persisted().then((ok) => { if (!ok) navigator.storage.persist(); }).catch(() => {});
   }
 }
 
@@ -1425,6 +1484,14 @@ function init() {
 
   refreshAll();
   registerServiceWorker();
+  requestPersistentStorage();
+
+  // Home-screen shortcut: "Add event".
+  const params = new URLSearchParams(location.search);
+  if (params.get('action') === 'add') {
+    history.replaceState(null, '', location.pathname);
+    openModal(null);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);
